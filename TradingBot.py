@@ -230,7 +230,7 @@ def main():
     start_date = (today - timedelta(days=3*365)).strftime('%Y-%m-%d')
     end_date = today.strftime('%Y-%m-%d')
 
-    data = get_historical_data('BTC-AUD', start_date, end_date)
+    data = get_historical_data('TSLA', start_date, end_date)
     if data.empty:
         print("No data retrieved. Exiting.")
         return

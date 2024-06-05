@@ -250,3 +250,9 @@
 2024-06-05 20:14:19,407:INFO:Model training successful, X_train shape: (699, 12), X_test shape: (175, 12)
 2024-06-05 20:14:22,188:INFO:Model evaluation successful
 2024-06-05 20:14:25,258:INFO:Trading simulation successful
+2024-06-05 20:18:17,877:INFO:Data retrieval successful, shape: (754, 6)
+2024-06-05 20:18:17,880:INFO:Data preprocessing successful, shape: (754, 6)
+2024-06-05 20:18:17,889:INFO:Feature engineering successful, shape: (533, 18)
+2024-06-05 20:18:43,937:INFO:Model training successful, X_train shape: (426, 12), X_test shape: (107, 12)
+2024-06-05 20:18:53,607:INFO:Model evaluation successful
+2024-06-05 20:18:54,968:INFO:Trading simulation successful
