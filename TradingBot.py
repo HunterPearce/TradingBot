@@ -159,22 +159,6 @@ def evaluate_model(model, X_test, y_test):
         logging.error(f"Error in model evaluation: {e}")
         return {}
 
-def send_email(subject, body):
-    msg = MIMEMultipart()
-    msg['From'] = EMAIL_ADDRESS
-    msg['To'] = TO_EMAIL
-    msg['Subject'] = subject
-
-    msg.attach(MIMEText(body, 'plain'))
-    try:
-        with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
-            server.starttls()
-            server.login(EMAIL_ADDRESS, EMAIL_PASSWORD)
-            server.sendmail(EMAIL_ADDRESS, TO_EMAIL, msg.as_string())
-        logging.info("Email sent successfully")
-    except Exception as e:
-        logging.error(f"Error sending email: {e}")
-
 def simulate_trading(model, data):
     try:
         initial_balance = 1000
