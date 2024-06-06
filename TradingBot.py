@@ -4,7 +4,8 @@ import yfinance as yf
 import pandas as pd
 import pytz
 from sklearn.preprocessing import MinMaxScaler
-from sklearn.model_selection import train_test_split, RandomizedSearchCV
+from sklearn.model_selection import train_test_split
+from skopt import BayesSearchCV
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier, VotingClassifier
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, roc_auc_score
 import numpy as np
@@ -87,10 +88,27 @@ def compute_bollinger_bands(data, window=20, no_of_stds=2):
     data['Bollinger Low'] = rolling_mean - (rolling_std * no_of_stds)
     return data
 
+def compute_ema(data, span):
+    return data['Close'].ewm(span=span, adjust=False).mean()
+
+def compute_stochastic_oscillator(data, window=14):
+    data['L14'] = data['Low'].rolling(window=window).min()
+    data['H14'] = data['High'].rolling(window=window).max()
+    data['%K'] = 100 * ((data['Close'] - data['L14']) / (data['H14'] - data['L14']))
+    return data
+
+def compute_obv(data):
+    data['OBV'] = (np.sign(data['Close'].diff()) * data['Volume']).fillna(0).cumsum()
+    return data
+
 def create_features(data):
     try:
         data = compute_macd(data)
         data = compute_bollinger_bands(data)
+        data = compute_stochastic_oscillator(data)
+        data = compute_obv(data)
+        data['EMA12'] = compute_ema(data, 12)
+        data['EMA26'] = compute_ema(data, 26)
         data['MA50'] = data['Close'].rolling(window=50).mean()
         data['MA200'] = data['Close'].rolling(window=200).mean()
         data['RSI'] = compute_rsi(data['Close'])
@@ -109,32 +127,42 @@ def create_features(data):
 # Model Training
 def train_model(data):
     try:
-        feature_columns = ['MA50', 'MA200', 'RSI', 'MA50-200', 'Returns', 'MACD', 'Signal Line', 'Bollinger High', 'Bollinger Low', 'Log Returns', 'Volatility', 'Momentum']
+        feature_columns = ['MA50', 'MA200', 'RSI', 'MA50-200', 'Returns', 'MACD', 'Signal Line', 'Bollinger High', 'Bollinger Low', 'Log Returns', 'Volatility', 'Momentum', 'EMA12', 'EMA26', '%K', 'OBV']
         X = data[feature_columns].dropna()
         y = (data['Close'].shift(-1) > data['Close']).astype(int).dropna()
         X, y = X.align(y, join='inner', axis=0)
         X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
-        rf_param_grid = {
-            'n_estimators': [100, 200, 300, 500],
-            'max_depth': [10, 20, 30, None],
-            'min_samples_split': [2, 5, 10],
-            'min_samples_leaf': [1, 2, 4]
-        }
         rf_model = RandomForestClassifier(random_state=42)
-        rf_grid_search = RandomizedSearchCV(rf_model, rf_param_grid, cv=5, scoring='accuracy', n_iter=50, n_jobs=-1, random_state=42)
-        rf_grid_search.fit(X_train, y_train)
-        best_rf_model = rf_grid_search.best_estimator_
+        rf_search = BayesSearchCV(
+            rf_model,
+            {
+                'n_estimators': (100, 1000),
+                'max_depth': (10, 50),
+                'min_samples_split': (2, 10),
+                'min_samples_leaf': (1, 4)
+            },
+            n_iter=50,
+            cv=5,
+            random_state=42
+        )
+        rf_search.fit(X_train, y_train)
+        best_rf_model = rf_search.best_estimator_
 
-        gb_param_grid = {
-            'n_estimators': [100, 200, 300],
-            'learning_rate': [0.01, 0.05, 0.1, 0.2],
-            'max_depth': [3, 5, 7]
-        }
         gb_model = GradientBoostingClassifier(random_state=42)
-        gb_grid_search = RandomizedSearchCV(gb_model, gb_param_grid, cv=5, scoring='accuracy', n_iter=50, n_jobs=-1, random_state=42)
-        gb_grid_search.fit(X_train, y_train)
-        best_gb_model = gb_grid_search.best_estimator_
+        gb_search = BayesSearchCV(
+            gb_model,
+            {
+                'n_estimators': (100, 1000),
+                'learning_rate': (0.01, 0.2, 'log-uniform'),
+                'max_depth': (3, 10)
+            },
+            n_iter=50,
+            cv=5,
+            random_state=42
+        )
+        gb_search.fit(X_train, y_train)
+        best_gb_model = gb_search.best_estimator_
 
         xgb_model = XGBClassifier(random_state=42)
 
@@ -205,7 +233,7 @@ def simulate_trading(model, data):
         trade_log = []  # List to store trade details
         buy_price = 0  # Variable to store the price at which shares were bought
 
-        feature_columns = ['MA50', 'MA200', 'RSI', 'MA50-200', 'Returns', 'MACD', 'Signal Line', 'Bollinger High', 'Bollinger Low', 'Log Returns', 'Volatility', 'Momentum']
+        feature_columns = ['MA50', 'MA200', 'RSI', 'MA50-200', 'Returns', 'MACD', 'Signal Line', 'Bollinger High', 'Bollinger Low', 'Log Returns', 'Volatility', 'Momentum', 'EMA12', 'EMA26', '%K', 'OBV']
 
         logging.info("Starting trading simulation")
 
@@ -215,7 +243,7 @@ def simulate_trading(model, data):
                 features = pd.DataFrame([[
                     row['MA50'], row['MA200'], row['RSI'], row['MA50-200'], 
                     row['Returns'], row['MACD'], row['Signal Line'], 
-                    row['Bollinger High'], row['Bollinger Low'], row['Log Returns'], row['Volatility'], row['Momentum']
+                    row['Bollinger High'], row['Bollinger Low'], row['Log Returns'], row['Volatility'], row['Momentum'], row['EMA12'], row['EMA26'], row['%K'], row['OBV']
                 ]], columns=feature_columns)
                 
                 prediction = model.predict(features)[0]
@@ -285,7 +313,7 @@ def simulate_trading(model, data):
         if not trade_df.empty:
             last_trade = trade_df.iloc[-1]
             last_trade_date = datetime.strptime(last_trade['Date'], '%Y-%m-%d %H:%M:%S')
-            if (datetime.now() - last_trade_date).days <= 20:
+            if (datetime.now() - last_trade_date).days <= 1:
                 trade_log_msg = f"Trade Alert! \nAction: {last_trade['Action']} \nDate: {last_trade['Date']},"
                 send_telegram_message(trade_log_msg)
 
@@ -298,7 +326,7 @@ def main():
     start_date = (today - timedelta(days=3*365)).strftime('%Y-%m-%d')
     end_date = today.strftime('%Y-%m-%d')
 
-    data = get_historical_data('BTC', start_date, end_date)
+    data = get_historical_data('BTC-USD', start_date, end_date)
     if data.empty:
         print("No data retrieved. Exiting.")
         return
