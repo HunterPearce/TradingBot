@@ -1,19 +1,43 @@
+import os
+import requests
 import yfinance as yf
 import pandas as pd
+import pytz
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.model_selection import train_test_split, RandomizedSearchCV
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier, VotingClassifier
-from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, roc_auc_score, roc_curve
+from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, roc_auc_score
 import numpy as np
 import matplotlib.pyplot as plt
 import logging
 from datetime import datetime, timedelta
 from xgboost import XGBClassifier
-import smtplib
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Configure logging
 logging.basicConfig(filename='trading_bot.log', level=logging.INFO, 
                     format='%(asctime)s:%(levelname)s:%(message)s')
+
+# Function to send Telegram messages
+def send_telegram_message(message):
+    try:
+        bot_token = os.getenv('TELEGRAM_BOT_TOKEN')
+        chat_id = os.getenv('TELEGRAM_CHAT_ID')
+
+        if not bot_token or not chat_id:
+            raise ValueError("TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID environment variables are not set")
+
+        url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+        payload = {'chat_id': chat_id, 'text': message}
+
+        response = requests.post(url, data=payload)
+        response.raise_for_status()
+        logging.info(f"Telegram message sent successfully: {message}")
+    except Exception as e:
+        logging.error(f"Error sending Telegram message: {e}")
 
 # Data Collection
 def get_historical_data(ticker, start_date, end_date):
@@ -52,15 +76,15 @@ def compute_macd(data):
     LongEMA = data['Close'].ewm(span=26, adjust=False).mean()
     MACD = ShortEMA - LongEMA
     signal = MACD.ewm(span=9, adjust=False).mean()
-    data.loc[:, 'MACD'] = MACD
-    data.loc[:, 'Signal Line'] = signal
+    data['MACD'] = MACD
+    data['Signal Line'] = signal
     return data
 
 def compute_bollinger_bands(data, window=20, no_of_stds=2):
     rolling_mean = data['Close'].rolling(window=window).mean()
     rolling_std = data['Close'].rolling(window=window).std()
-    data.loc[:, 'Bollinger High'] = rolling_mean + (rolling_std * no_of_stds)
-    data.loc[:, 'Bollinger Low'] = rolling_mean - (rolling_std * no_of_stds)
+    data['Bollinger High'] = rolling_mean + (rolling_std * no_of_stds)
+    data['Bollinger Low'] = rolling_mean - (rolling_std * no_of_stds)
     return data
 
 def create_features(data):
@@ -85,7 +109,8 @@ def create_features(data):
 # Model Training
 def train_model(data):
     try:
-        X = data[['MA50', 'MA200', 'RSI', 'MA50-200', 'Returns', 'MACD', 'Signal Line', 'Bollinger High', 'Bollinger Low', 'Log Returns', 'Volatility', 'Momentum']].dropna()
+        feature_columns = ['MA50', 'MA200', 'RSI', 'MA50-200', 'Returns', 'MACD', 'Signal Line', 'Bollinger High', 'Bollinger Low', 'Log Returns', 'Volatility', 'Momentum']
+        X = data[feature_columns].dropna()
         y = (data['Close'].shift(-1) > data['Close']).astype(int).dropna()
         X, y = X.align(y, join='inner', axis=0)
         X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
@@ -121,10 +146,10 @@ def train_model(data):
         ensemble_model.fit(X_train, y_train)
 
         logging.info(f"Model training successful, X_train shape: {X_train.shape}, X_test shape: {X_test.shape}")
-        return ensemble_model, X_test, y_test, best_rf_model, best_gb_model, xgb_model, X_train
+        return ensemble_model, X_test, y_test
     except Exception as e:
         logging.error(f"Error in model training: {e}")
-        return None, None, None, None, None, None, None
+        return None, None, None
 
 def evaluate_model(model, X_test, y_test):
     try:
@@ -134,19 +159,6 @@ def evaluate_model(model, X_test, y_test):
         report = classification_report(y_test, y_pred)
         conf_matrix = confusion_matrix(y_test, y_pred)
         auc_roc = roc_auc_score(y_test, y_pred_proba)
-
-        # Plotting AUC-ROC Curve
-        fpr, tpr, _ = roc_curve(y_test, y_pred_proba)
-        plt.figure()
-        plt.plot(fpr, tpr, color='darkorange', lw=2, label='ROC curve (area = %0.2f)' % auc_roc)
-        plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')
-        plt.xlim([0.0, 1.0])
-        plt.ylim([0.0, 1.05])
-        plt.xlabel('False Positive Rate')
-        plt.ylabel('True Positive Rate')
-        plt.title('Receiver Operating Characteristic')
-        plt.legend(loc="lower right")
-        plt.show()
 
         logging.info("Model evaluation successful")
         return {
@@ -159,12 +171,33 @@ def evaluate_model(model, X_test, y_test):
         logging.error(f"Error in model evaluation: {e}")
         return {}
 
+def handle_buy_signal(index, row, balance, shares, position_size, transaction_cost, trade_log):
+    shares_to_buy = (position_size / row['Close']) * (1 - transaction_cost)
+    cost = shares_to_buy * row['Close']
+    if cost <= balance:
+        balance -= cost
+        shares += shares_to_buy
+        trade_log.append([index.strftime('%Y-%m-%d %H:%M:%S'), 'Buy', shares, balance, ""])
+        logging.info(f"Buy signal executed at {index}")
+    return balance, shares
+
+def handle_sell_signal(index, row, balance, shares, buy_price, transaction_cost, trade_log):
+    sell_revenue = shares * row['Close'] * (1 - transaction_cost)
+    balance += sell_revenue
+    profit = sell_revenue - (shares * buy_price) * (1 + transaction_cost)
+    shares = 0
+    trade_log.append([index.strftime('%Y-%m-%d %H:%M:%S'), 'Sell', shares, balance, profit])
+    logging.info(f"Sell signal executed at {index}")
+    return balance, shares
+
 def simulate_trading(model, data):
     try:
         initial_balance = 1000
         balance = initial_balance
         shares = 0
         num_trades = 0
+        buy_signals = 0
+        sell_signals = 0
         position_size = 100  # Fixed position size of $100
         transaction_cost = 0.001  # Example transaction cost: 0.1%
         open_position = False  # Track if there is an open position
@@ -174,7 +207,10 @@ def simulate_trading(model, data):
 
         feature_columns = ['MA50', 'MA200', 'RSI', 'MA50-200', 'Returns', 'MACD', 'Signal Line', 'Bollinger High', 'Bollinger Low', 'Log Returns', 'Volatility', 'Momentum']
 
+        logging.info("Starting trading simulation")
+
         for index, row in data.iterrows():
+            logging.debug(f"Processing row: {index}")
             try:
                 features = pd.DataFrame([[
                     row['MA50'], row['MA200'], row['RSI'], row['MA50-200'], 
@@ -183,30 +219,40 @@ def simulate_trading(model, data):
                 ]], columns=feature_columns)
                 
                 prediction = model.predict(features)[0]
+                logging.debug(f"Prediction at {index}: {prediction}")
             except Exception as e:
                 logging.error(f"Error predicting at {index}: {e}")
                 continue
 
             if prediction == 1 and not open_position:  # Buy signal and no open position
+                logging.debug(f"Buy signal at {index}")
                 if balance >= position_size:  # Buy if balance is sufficient
-                    shares_to_buy = (position_size / row['Close']) * (1 - transaction_cost)
-                    cost = shares_to_buy * row['Close']
-                    if cost <= balance:
-                        balance -= cost  # Subtract the cost from the balance
-                        shares += shares_to_buy
-                        buy_price = row['Close']
-                        open_position = True
-                        num_trades += 1
-                        trade_log.append([index, 'Buy', shares, balance, ""])
+                    balance, shares = handle_buy_signal(index, row, balance, shares, position_size, transaction_cost, trade_log)
+                    buy_price = row['Close']
+                    open_position = True
+                    num_trades += 1
+                    buy_signals += 1
+
             elif prediction == 0 and open_position:  # Sell signal and an open position
+                logging.debug(f"Sell signal at {index}")
                 if shares > 0:  # Sell if holding shares
-                    sell_revenue = shares * row['Close'] * (1 - transaction_cost)
-                    balance += sell_revenue
-                    profit = sell_revenue - (shares * buy_price) * (1 + transaction_cost)
-                    shares = 0
+                    balance, shares = handle_sell_signal(index, row, balance, shares, buy_price, transaction_cost, trade_log)
                     open_position = False
                     num_trades += 1
-                    trade_log.append([index, 'Sell', shares, balance, profit])
+                    sell_signals += 1
+
+        if num_trades == 0:
+            logging.info("No trades executed. Exiting.")
+            print("No trades executed. Exiting.")
+            return
+
+        if buy_signals == 0:
+            logging.info("No buy signals executed.")
+            print("No buy signals executed.")
+
+        if sell_signals == 0:
+            logging.info("No sell signals executed.")
+            print("No sell signals executed.")
 
         final_balance = balance + shares * data.iloc[-1]['Close'] * (1 - transaction_cost)
         profit = final_balance - initial_balance
@@ -218,8 +264,30 @@ def simulate_trading(model, data):
         print(f"Percentage Change: {percentage_change:.2f}%")
         print(f"Number of Trades: {num_trades}")
 
+        # Save the trade log to a CSV file
         trade_df = pd.DataFrame(trade_log, columns=['Date', 'Action', 'Shares', 'Balance', 'Profit'])
         trade_df.to_csv('trade_log.csv', index=False)
+
+        # Create a DataFrame for simulation results for each trade
+        simulation_results = trade_df.copy()
+        simulation_results['Initial Balance'] = initial_balance
+        simulation_results['Final Balance'] = final_balance
+        simulation_results['Total Profit'] = profit
+        simulation_results['Percentage Change'] = percentage_change
+        simulation_results['Number of Trades'] = num_trades
+        simulation_results['Buy Signals'] = buy_signals
+        simulation_results['Sell Signals'] = sell_signals
+
+        # Save the simulation results to a CSV file
+        simulation_results.to_csv('simulation_results.csv', index=False)
+
+        # Send the most recent trade to Telegram only if it occurred in the last day
+        if not trade_df.empty:
+            last_trade = trade_df.iloc[-1]
+            last_trade_date = datetime.strptime(last_trade['Date'], '%Y-%m-%d %H:%M:%S')
+            if (datetime.now() - last_trade_date).days <= 20:
+                trade_log_msg = f"Trade Alert! \nAction: {last_trade['Action']} \nDate: {last_trade['Date']},"
+                send_telegram_message(trade_log_msg)
 
         logging.info("Trading simulation successful")
     except Exception as e:
@@ -230,7 +298,7 @@ def main():
     start_date = (today - timedelta(days=3*365)).strftime('%Y-%m-%d')
     end_date = today.strftime('%Y-%m-%d')
 
-    data = get_historical_data('TSLA', start_date, end_date)
+    data = get_historical_data('BTC', start_date, end_date)
     if data.empty:
         print("No data retrieved. Exiting.")
         return
@@ -245,7 +313,7 @@ def main():
         print("Feature engineering failed. Exiting.")
         return
 
-    model, X_test, y_test, best_rf_model, best_gb_model, xgb_model, X_train = train_model(feature_data)
+    model, X_test, y_test = train_model(feature_data)
     if model is None:
         print("Model training failed. Exiting.")
         return

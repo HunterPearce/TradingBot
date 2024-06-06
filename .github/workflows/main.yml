@@ -1,0 +1,22 @@
+name: Run Python Script Every 12 Hours
+
+on:
+  schedule:
+    - cron: '0 */12 * * *'  # This cron expression runs the job every 12 hours.
+  workflow_dispatch:
+jobs:
+  run-script:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v2
+      - name: Set up Python
+        uses: actions/setup-python@v2
+        with:
+          python-version: '3.x'
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+      - name: Run script
+        run: |
+          python TradingBot.py
