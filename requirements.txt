@@ -8,4 +8,3 @@ matplotlib
 xgboost
 python-dotenv
 scikit-optimize
-skopt

@@ -4596,3 +4596,6 @@ Date: 2024-05-28 00:00:00,
 2024-06-06 17:23:41,161:INFO:Data retrieval successful, shape: (1095, 6)
 2024-06-06 17:23:41,166:INFO:Data preprocessing successful, shape: (1095, 6)
 2024-06-06 17:23:41,229:INFO:Feature engineering successful, shape: (874, 24)
+2024-06-06 17:28:59,660:INFO:Data retrieval successful, shape: (1095, 6)
+2024-06-06 17:28:59,663:INFO:Data preprocessing successful, shape: (1095, 6)
+2024-06-06 17:28:59,676:INFO:Feature engineering successful, shape: (874, 24)
