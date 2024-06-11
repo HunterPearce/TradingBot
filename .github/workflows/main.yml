@@ -1,8 +1,8 @@
-name: Run Python Script Every 12 Hours
+name: Run Python Script Every 6 Hours
 
 on:
   schedule:
-    - cron: '0 */12 * * *'  # This cron expression runs the job every 12 hours.
+    - cron: '0 */6 * * *'  # This cron expression runs the job every 6 hours.
   workflow_dispatch:  # Allows manual trigger
 
 jobs:

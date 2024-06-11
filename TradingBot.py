@@ -41,11 +41,29 @@ def send_telegram_message(message):
         logging.error(f"Error sending Telegram message: {e}")
 
 # Data Collection
-def get_historical_data(ticker, start_date, end_date):
+def get_historical_data(ticker, start_date, end_date, csv_file='historical_data.csv'):
     try:
-        data = yf.download(ticker, start=start_date, end=end_date)
-        logging.info(f"Data retrieval successful, shape: {data.shape}")
-        return data
+        if os.path.exists(csv_file):
+            existing_data = pd.read_csv(csv_file, index_col='Date', parse_dates=True)
+            last_date = existing_data.index[-1].strftime('%Y-%m-%d')
+            if last_date >= end_date:
+                logging.info(f"No new data needed, up to date with data ending {last_date}")
+                return existing_data
+            new_data = yf.download(ticker, start=last_date, end=end_date)
+            if not new_data.empty:
+                new_data = new_data.iloc[1:]  # Remove the overlapping last row
+                combined_data = pd.concat([existing_data, new_data])
+                combined_data.to_csv(csv_file)
+                logging.info(f"New data appended, combined data shape: {combined_data.shape}")
+                return combined_data
+            else:
+                logging.info("No new data retrieved")
+                return existing_data
+        else:
+            data = yf.download(ticker, start=start_date, end=end_date)
+            data.to_csv(csv_file)
+            logging.info(f"Data retrieval and CSV storage successful, shape: {data.shape}")
+            return data
     except Exception as e:
         logging.error(f"Error in data retrieval: {e}")
         return pd.DataFrame()
